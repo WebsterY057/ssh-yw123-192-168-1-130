@@ -1,0 +1,34 @@
+# macOS / editor noise
+.DS_Store
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Local runtime/cache artifacts
+.mplconfig/
+
+# Generated summaries at repo root
+daily_summary.csv
+daily_summary.json
+
+# Generated backtest outputs
+alpha_futures_dex_universe_backtest/*.csv
+alpha_futures_dex_universe_backtest/*.json
+
+# Generated execution outputs under dated folders
+clo_directional_long_dexonly_divergence/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]/
+clo_directional_short_bookres_divergence/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]/
+clo_multi_day_tick3600ms_execution_compare_full5/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]/
+clo_multi_day_tick3600ms_execution_compare_full5/daily_summary.csv
+clo_multi_day_tick3600ms_execution_compare_full5/daily_summary.json
+
+# Generated comparison outputs, keep source scripts
+clo_20260611_tick3600ms_execution_compare/*.csv
+clo_20260611_tick3600ms_execution_compare/*.json
+!clo_20260611_tick3600ms_execution_compare/build_layer_js.py
+!clo_20260611_tick3600ms_execution_compare/clo_20260611_tick3600ms_execution_backtest.py
+
+# Generated web assets
+clo_price_curve_web_full5/*.js
+clo_price_curve_web_full5/*.html
