@@ -1,18 +1,35 @@
 #!/usr/bin/env python3
+import argparse
 import csv
 import json
 from pathlib import Path
 
 
-BASE = Path("/Users/yy/Documents/Codex/2026-06-02/ssh-yw123-192-168-1-130")
-SRC = BASE / "clo_20260611_tick3600ms_execution_compare"
-OUT = BASE / "clo_20260611_signal_layers.js"
-
-FILES = {
-    "book_only": SRC / "book_only_detail.csv",
-    "book_resonance": SRC / "book_resonance_detail.csv",
-    "trade_resonance": SRC / "trade_resonance_detail.csv",
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_SOURCE_DIR = REPO_ROOT / "outputs" / "clo_20260611_tick3600ms_execution_compare"
+DEFAULT_OUTPUT_FILE = REPO_ROOT / "outputs" / "web" / "clo_20260611_signal_layers.js"
+DETAIL_FILES = {
+    "book_only": "book_only_detail.csv",
+    "book_resonance": "book_resonance_detail.csv",
+    "trade_resonance": "trade_resonance_detail.csv",
 }
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Build a browser-friendly JS payload from backtest outputs.")
+    parser.add_argument(
+        "--source-dir",
+        type=Path,
+        default=DEFAULT_SOURCE_DIR,
+        help="Directory containing execution_summary.json and layer detail CSV files.",
+    )
+    parser.add_argument(
+        "--output-file",
+        type=Path,
+        default=DEFAULT_OUTPUT_FILE,
+        help="JS file to generate.",
+    )
+    return parser.parse_args()
 
 
 def load_rows(path: Path):
@@ -70,11 +87,16 @@ def load_rows(path: Path):
 
 
 def main():
-    summary = json.loads((SRC / "execution_summary.json").read_text(encoding="utf-8"))
-    layers = {key: load_rows(path) for key, path in FILES.items()}
+    args = parse_args()
+    summary = json.loads((args.source_dir / "execution_summary.json").read_text(encoding="utf-8"))
+    layers = {key: load_rows(args.source_dir / filename) for key, filename in DETAIL_FILES.items()}
     payload = {"summary": summary, "layers": layers}
-    OUT.write_text("window.CLO_SIGNAL_LAYER_DATA = " + json.dumps(payload, ensure_ascii=False) + ";\n", encoding="utf-8")
-    print(f"wrote {OUT}")
+    args.output_file.parent.mkdir(parents=True, exist_ok=True)
+    args.output_file.write_text(
+        "window.CLO_SIGNAL_LAYER_DATA = " + json.dumps(payload, ensure_ascii=False) + ";\n",
+        encoding="utf-8",
+    )
+    print(f"wrote {args.output_file}")
 
 
 if __name__ == "__main__":

@@ -1,34 +1,45 @@
-# macOS / editor noise
+# OS / editor noise
 .DS_Store
 
-# Python cache
+# Python
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
 
-# Local runtime/cache artifacts
+# Frontend build artifacts
+frontend/node_modules/
+frontend/dist/
+
+# Local runtime cache
 .mplconfig/
 
-# Generated summaries at repo root
+# Canonical generated output location
+outputs/
+data/cache/
+
+# Legacy generated summaries
 daily_summary.csv
 daily_summary.json
 
-# Generated backtest outputs
-alpha_futures_dex_universe_backtest/*.csv
-alpha_futures_dex_universe_backtest/*.json
+# Scratch placeholders
+AGENT.MD
 
-# Generated execution outputs under dated folders
-clo_directional_long_dexonly_divergence/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]/
-clo_directional_short_bookres_divergence/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]/
-clo_multi_day_tick3600ms_execution_compare_full5/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]/
-clo_multi_day_tick3600ms_execution_compare_full5/daily_summary.csv
-clo_multi_day_tick3600ms_execution_compare_full5/daily_summary.json
+# Legacy generated result directories
+alpha_futures_dex_universe_backtest/
+clo_20260611_tick3600ms_execution_compare/
+clo_directional_long_dexonly_divergence/
+clo_directional_short_bookres_divergence/
+clo_multi_day_tick3600ms_execution_compare_full5/
+clo_price_curve_web_full5/
+short_book_resonance_divergence_universe_backtest/
 
-# Generated comparison outputs, keep source scripts
-clo_20260611_tick3600ms_execution_compare/*.csv
-clo_20260611_tick3600ms_execution_compare/*.json
-!clo_20260611_tick3600ms_execution_compare/build_layer_js.py
-!clo_20260611_tick3600ms_execution_compare/clo_20260611_tick3600ms_execution_backtest.py
+# Legacy scratch docs directory after refactor
+共振信号交易策略/
 
-# Generated web assets
-clo_price_curve_web_full5/*.js
-clo_price_curve_web_full5/*.html
+# Dashboard app
+frontend/node_modules/
+frontend/dist/

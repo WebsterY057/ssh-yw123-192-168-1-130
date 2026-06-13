@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
+import argparse
 import csv
 import json
+import os
 from pathlib import Path
 
 import duckdb
@@ -8,44 +10,69 @@ import numpy as np
 import pandas as pd
 
 
-DATE = "2026-06-11"
-FLOW_WINDOW_MS = 3600
-HIST_WINDOW_SEC = 3600
-Z_THRESHOLD = 2.0
-HOLDS = [5, 10, 20, 30, 60, 120, 300]
-TRADE_SIZE = 100.0
-CEX_FEE = 0.0001530
-BUCKET = "s3://zly/crypto-alpha/raw"
-OUT_DIR = Path("/home/yw123/clo_20260611_tick3600ms_execution_compare")
-
-FLOW_WINDOW_NS = FLOW_WINDOW_MS * 1_000_000
-HIST_WINDOW_NS = HIST_WINDOW_SEC * 1_000_000_000
-
-S3_OPTS = dict(
-    KEY_ID="yw123",
-    SECRET="yw123456",
-    REGION="us-east-1",
-    ENDPOINT="192.168.1.130:9000",
-    URL_STYLE="path",
-    USE_SSL=False,
-)
-
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_DATE = "2026-06-11"
+DEFAULT_FLOW_WINDOW_MS = 3600
+DEFAULT_HIST_WINDOW_SEC = 3600
+DEFAULT_Z_THRESHOLD = 2.0
+DEFAULT_HOLDS = [5, 10, 20, 30, 60, 120, 300]
+DEFAULT_TRADE_SIZE = 100.0
+DEFAULT_CEX_FEE = 0.0001530
+DEFAULT_BUCKET = "s3://zly/crypto-alpha/raw"
+DEFAULT_OUTPUT_DIR = REPO_ROOT / "outputs" / "clo_20260611_tick3600ms_execution_compare"
+DEFAULT_CEX_PAIR_KEY = "clousdt"
+DEFAULT_DEX_SYMBOL = "alpha_429usdt"
 LAYER_ORDER = ["book_only", "book_resonance", "trade_resonance"]
 
 
-def duck_setup():
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run the CLO CEX x DEX resonance backtest.")
+    parser.add_argument("--date", default=DEFAULT_DATE, help="Trading date in YYYY-MM-DD format.")
+    parser.add_argument("--bucket", default=DEFAULT_BUCKET, help="S3 bucket prefix used by DuckDB.")
+    parser.add_argument("--cex-pair-key", default=DEFAULT_CEX_PAIR_KEY, help="CEX pair key under the raw bucket.")
+    parser.add_argument("--dex-symbol", default=DEFAULT_DEX_SYMBOL, help="DEX symbol under the raw bucket.")
+    parser.add_argument("--flow-window-ms", type=int, default=DEFAULT_FLOW_WINDOW_MS, help="Rolling flow window in milliseconds.")
+    parser.add_argument("--hist-window-sec", type=int, default=DEFAULT_HIST_WINDOW_SEC, help="Historical lookback window in seconds.")
+    parser.add_argument("--z-threshold", type=float, default=DEFAULT_Z_THRESHOLD, help="Z-score threshold for signal activation.")
+    parser.add_argument("--trade-size", type=float, default=DEFAULT_TRADE_SIZE, help="Per-trade notional used in execution simulation.")
+    parser.add_argument("--cex-fee", type=float, default=DEFAULT_CEX_FEE, help="One-way CEX fee ratio.")
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=DEFAULT_OUTPUT_DIR,
+        help="Directory where generated CSV and JSON artifacts will be written.",
+    )
+    return parser.parse_args()
+
+
+def get_s3_opts():
+    key_id = os.getenv("ALPHA_S3_KEY_ID")
+    secret = os.getenv("ALPHA_S3_SECRET")
+    if not key_id or not secret:
+        raise RuntimeError("Missing ALPHA_S3_KEY_ID or ALPHA_S3_SECRET environment variables.")
+    return {
+        "KEY_ID": key_id,
+        "SECRET": secret,
+        "REGION": os.getenv("ALPHA_S3_REGION", "us-east-1"),
+        "ENDPOINT": os.getenv("ALPHA_S3_ENDPOINT", "192.168.1.130:9000"),
+        "URL_STYLE": os.getenv("ALPHA_S3_URL_STYLE", "path"),
+        "USE_SSL": os.getenv("ALPHA_S3_USE_SSL", "false").lower() == "true",
+    }
+
+
+def duck_setup(s3_opts):
     con = duckdb.connect(":memory:")
     con.execute("INSTALL httpfs; LOAD httpfs;")
     con.execute(
         f"""
         CREATE SECRET zly (
             TYPE S3,
-            KEY_ID '{S3_OPTS["KEY_ID"]}',
-            SECRET '{S3_OPTS["SECRET"]}',
-            REGION '{S3_OPTS["REGION"]}',
-            ENDPOINT '{S3_OPTS["ENDPOINT"]}',
-            URL_STYLE '{S3_OPTS["URL_STYLE"]}',
-            USE_SSL {str(S3_OPTS["USE_SSL"]).lower()}
+            KEY_ID '{s3_opts["KEY_ID"]}',
+            SECRET '{s3_opts["SECRET"]}',
+            REGION '{s3_opts["REGION"]}',
+            ENDPOINT '{s3_opts["ENDPOINT"]}',
+            URL_STYLE '{s3_opts["URL_STYLE"]}',
+            USE_SSL {str(s3_opts["USE_SSL"]).lower()}
         );
         """
     )
@@ -100,12 +127,12 @@ def rolling_z_on_event_series(values, query_ts, hist_window_ns):
     return z, n
 
 
-def load_inputs():
-    con = duck_setup()
+def load_inputs(args):
+    con = duck_setup(get_s3_opts())
 
     trade_glob = (
-        f"{BUCKET}/exchange=binance-alpha-cex/market=futures/"
-        f"exchange_pair_key=clousdt/data_type=trade/date={DATE}/hour=*/*.csv.zst"
+        f"{args.bucket}/exchange=binance-alpha-cex/market=futures/"
+        f"exchange_pair_key={args.cex_pair_key}/data_type=trade/date={args.date}/hour=*/*.csv.zst"
     )
     trade_df = con.execute(
         f"""
@@ -125,8 +152,8 @@ def load_inputs():
     trade_sell_vals = np.where(trade_side.str.contains("sell").to_numpy(), trade_vals, 0.0)
 
     swap_glob = (
-        f"{BUCKET}/exchange=binance/symbol=alpha_429usdt/"
-        f"data_type=onchain_swap/date={DATE}/hour=*/*.csv.zst"
+        f"{args.bucket}/exchange=binance/symbol={args.dex_symbol}/"
+        f"data_type=onchain_swap/date={args.date}/hour=*/*.csv.zst"
     )
     dex_df = con.execute(
         f"""
@@ -148,14 +175,14 @@ def load_inputs():
     dex_df.loc[mb, "vol_dex"] = dex_df.loc[mb, "stable_amount_out"].fillna(0) / 1e18 * 654
     dex_df.loc[ms, "vol_dex"] = dex_df.loc[ms, "stable_amount_in"].fillna(0) / 1e18 * 654
     dex_df = dex_df.sort_values("recv_timestamp_ms")
-    dex_ts = (dex_df["recv_timestamp_ms"].astype(np.int64).to_numpy() * 1_000_000)
+    dex_ts = dex_df["recv_timestamp_ms"].astype(np.int64).to_numpy() * 1_000_000
     dex_vals = dex_df["vol_dex"].astype(float).to_numpy()
     dex_buy_vals = np.where(dex_df["dir"].to_numpy() == 1, dex_vals, 0.0)
     dex_sell_vals = np.where(dex_df["dir"].to_numpy() == -1, dex_vals, 0.0)
 
     book_glob = (
-        f"{BUCKET}/exchange=binance-alpha-cex/market=futures/"
-        f"exchange_pair_key=clousdt/data_type=book_ticker/date={DATE}/hour=*/*.csv.zst"
+        f"{args.bucket}/exchange=binance-alpha-cex/market=futures/"
+        f"exchange_pair_key={args.cex_pair_key}/data_type=book_ticker/date={args.date}/hour=*/*.csv.zst"
     )
     book_df = con.execute(
         f"""
@@ -186,20 +213,20 @@ def load_inputs():
 def build_signal_frame(
     trade_ts, trade_vals, trade_buy_vals, trade_sell_vals,
     dex_ts, dex_vals, dex_buy_vals, dex_sell_vals,
-    book_ts, book_vals
+    book_ts, book_vals, flow_window_ns, hist_window_ns, z_threshold
 ):
     query_ts = np.unique(np.concatenate([trade_ts, dex_ts, book_ts]))
-    trade_roll = rolling_sum_at_queries(trade_ts, trade_vals, query_ts, FLOW_WINDOW_NS)
-    trade_buy_roll = rolling_sum_at_queries(trade_ts, trade_buy_vals, query_ts, FLOW_WINDOW_NS)
-    trade_sell_roll = rolling_sum_at_queries(trade_ts, trade_sell_vals, query_ts, FLOW_WINDOW_NS)
-    dex_roll = rolling_sum_at_queries(dex_ts, dex_vals, query_ts, FLOW_WINDOW_NS)
-    dex_buy_roll = rolling_sum_at_queries(dex_ts, dex_buy_vals, query_ts, FLOW_WINDOW_NS)
-    dex_sell_roll = rolling_sum_at_queries(dex_ts, dex_sell_vals, query_ts, FLOW_WINDOW_NS)
-    book_roll = rolling_sum_at_queries(book_ts, book_vals, query_ts, FLOW_WINDOW_NS)
+    trade_roll = rolling_sum_at_queries(trade_ts, trade_vals, query_ts, flow_window_ns)
+    trade_buy_roll = rolling_sum_at_queries(trade_ts, trade_buy_vals, query_ts, flow_window_ns)
+    trade_sell_roll = rolling_sum_at_queries(trade_ts, trade_sell_vals, query_ts, flow_window_ns)
+    dex_roll = rolling_sum_at_queries(dex_ts, dex_vals, query_ts, flow_window_ns)
+    dex_buy_roll = rolling_sum_at_queries(dex_ts, dex_buy_vals, query_ts, flow_window_ns)
+    dex_sell_roll = rolling_sum_at_queries(dex_ts, dex_sell_vals, query_ts, flow_window_ns)
+    book_roll = rolling_sum_at_queries(book_ts, book_vals, query_ts, flow_window_ns)
 
-    z_trade, n_trade = rolling_z_on_event_series(trade_roll, query_ts, HIST_WINDOW_NS)
-    z_dex, n_dex = rolling_z_on_event_series(dex_roll, query_ts, HIST_WINDOW_NS)
-    z_book, n_book = rolling_z_on_event_series(book_roll, query_ts, HIST_WINDOW_NS)
+    z_trade, n_trade = rolling_z_on_event_series(trade_roll, query_ts, hist_window_ns)
+    z_dex, n_dex = rolling_z_on_event_series(dex_roll, query_ts, hist_window_ns)
+    z_book, n_book = rolling_z_on_event_series(book_roll, query_ts, hist_window_ns)
 
     has_trade_update = np.zeros(len(query_ts), dtype=bool)
     has_dex_update = np.zeros(len(query_ts), dtype=bool)
@@ -208,17 +235,15 @@ def build_signal_frame(
     has_dex_update[np.searchsorted(query_ts, dex_ts)] = True
     has_book_update[np.searchsorted(query_ts, book_ts)] = True
 
-    burn_ts = query_ts[0] + HIST_WINDOW_NS
+    burn_ts = query_ts[0] + hist_window_ns
     valid = query_ts > burn_ts
 
-    trade_state = valid & (n_trade >= 10) & (trade_roll > 0) & (z_trade > Z_THRESHOLD)
-    dex_state = valid & (n_dex >= 10) & (dex_roll > 0) & (z_dex > Z_THRESHOLD)
-    book_state = valid & (n_book >= 10) & (book_roll > 0) & (z_book > Z_THRESHOLD)
+    trade_state = valid & (n_trade >= 10) & (trade_roll > 0) & (z_trade > z_threshold)
+    dex_state = valid & (n_dex >= 10) & (dex_roll > 0) & (z_dex > z_threshold)
+    book_state = valid & (n_book >= 10) & (book_roll > 0) & (z_book > z_threshold)
 
     trade_res_state = trade_state & dex_state
     book_res_state = book_state & dex_state
-    cex_only_state = trade_state & ~dex_state
-    dex_only_state = dex_state & ~trade_state
 
     def rising_edge(state, relevant):
         prev = np.r_[False, state[:-1]]
@@ -341,7 +366,7 @@ def simulate_sell_to_bids(book_df, start_idx, qty_to_sell):
     }
 
 
-def backtest_layer(frame, book_df, layer_name):
+def backtest_layer(frame, book_df, layer_name, holds, trade_size, cex_fee):
     book_ts = pd.to_datetime(book_df["recv_timestamp_ns"], unit="ns").values
     book_recv = book_df["recv_timestamp_ns"].astype(np.int64).to_numpy()
 
@@ -352,7 +377,7 @@ def backtest_layer(frame, book_df, layer_name):
         entry_idx = idx_le(book_ts, np.datetime64(signal_ns, "ns"))
         if entry_idx is None:
             continue
-        entry_fill = simulate_buy_first_ask_only(book_df, int(entry_idx), TRADE_SIZE)
+        entry_fill = simulate_buy_first_ask_only(book_df, int(entry_idx), trade_size)
         if not entry_fill:
             continue
         entry_idx = int(entry_fill["entry_idx"])
@@ -366,7 +391,7 @@ def backtest_layer(frame, book_df, layer_name):
         buy_fill_ratio = float(entry_fill["buy_fill_ratio"])
         if entry_qty <= 0 or entry_notional <= 0:
             continue
-        entry_cost = entry_notional * (1 + CEX_FEE)
+        entry_cost = entry_notional * (1 + cex_fee)
         prev_idx = entry_idx - 1 if entry_idx > 0 else None
         if prev_idx is not None:
             prev_ask = float(book_df.iloc[prev_idx]["ask_price"])
@@ -396,7 +421,7 @@ def backtest_layer(frame, book_df, layer_name):
             "obi": round(float(r.obi), 6),
             "dir_dex": str(r.dir_dex),
         }
-        for hold in HOLDS:
+        for hold in holds:
             exit_ns = entry_time_ns + hold * 1_000_000_000
             exit_idx = idx_ge(book_ts, np.datetime64(exit_ns, "ns"))
             if exit_idx is None:
@@ -427,10 +452,10 @@ def backtest_layer(frame, book_df, layer_name):
             exit_time_ns = int(exit_fill["exit_time_ns"])
             exit_vwap = gross_proceeds / sold_qty if sold_qty > 0 else None
             proceeds = gross_proceeds
-            net = proceeds - entry_cost - proceeds * CEX_FEE
+            net = proceeds - entry_cost - proceeds * cex_fee
             row[f"exit_bid_vwap_{hold}s"] = round(exit_vwap, 6) if exit_vwap is not None else None
             row[f"net_pnl_{hold}s"] = round(float(net), 6)
-            row[f"ret_{hold}s"] = round(float(net / TRADE_SIZE), 6)
+            row[f"ret_{hold}s"] = round(float(net / trade_size), 6)
             row[f"exit_time_{hold}s"] = fmt_ns(exit_time_ns)
         rows.append(row)
     return rows
@@ -461,39 +486,47 @@ def write_csv(path, rows):
 
 
 def main():
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    args = parse_args()
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+
+    flow_window_ns = args.flow_window_ms * 1_000_000
+    hist_window_ns = args.hist_window_sec * 1_000_000_000
 
     (
         trade_ts, trade_vals, trade_buy_vals, trade_sell_vals,
         dex_ts, dex_vals, dex_buy_vals, dex_sell_vals,
         book_ts, book_vals, book_df
-    ) = load_inputs()
+    ) = load_inputs(args)
     frame = build_signal_frame(
         trade_ts, trade_vals, trade_buy_vals, trade_sell_vals,
         dex_ts, dex_vals, dex_buy_vals, dex_sell_vals,
-        book_ts, book_vals
+        book_ts, book_vals, flow_window_ns, hist_window_ns, args.z_threshold
     )
 
     summary_rows = []
     summary_json = {
-        "date": DATE,
-        "flow_window_ms": FLOW_WINDOW_MS,
-        "hist_window_sec": HIST_WINDOW_SEC,
-        "z_threshold": Z_THRESHOLD,
-        "holds_sec": HOLDS,
+        "date": args.date,
+        "bucket": args.bucket,
+        "cex_pair_key": args.cex_pair_key,
+        "dex_symbol": args.dex_symbol,
+        "flow_window_ms": args.flow_window_ms,
+        "hist_window_sec": args.hist_window_sec,
+        "z_threshold": args.z_threshold,
+        "holds_sec": DEFAULT_HOLDS,
         "direction": "long_only",
-        "trade_size": TRADE_SIZE,
-        "cex_fee_one_way": CEX_FEE,
+        "trade_size": args.trade_size,
+        "cex_fee_one_way": args.cex_fee,
         "entry_rule": "at signal_time latest known ask, only consume level-1 ask on that tick",
         "exit_rule": "from first book tick >= entry_time+hold, keep selling into future bid ticks until fully filled",
+        "output_dir": str(args.output_dir),
         "layers": {},
     }
 
     for layer in LAYER_ORDER:
-        detail_rows = backtest_layer(frame, book_df, layer)
-        write_csv(OUT_DIR / f"{layer}_detail.csv", detail_rows)
+        detail_rows = backtest_layer(frame, book_df, layer, DEFAULT_HOLDS, args.trade_size, args.cex_fee)
+        write_csv(args.output_dir / f"{layer}_detail.csv", detail_rows)
         layer_summary = {}
-        for hold in HOLDS:
+        for hold in DEFAULT_HOLDS:
             stats = summarize_layer(detail_rows, hold)
             layer_summary[f"{hold}s"] = stats
             summary_rows.append({"layer": layer, "hold_sec": hold, **stats})
@@ -502,9 +535,9 @@ def main():
             "hold_stats": layer_summary,
         }
 
-    frame.to_csv(OUT_DIR / "signal_frame_tick3600ms.csv", index=False)
-    write_csv(OUT_DIR / "execution_summary.csv", summary_rows)
-    (OUT_DIR / "execution_summary.json").write_text(
+    frame.to_csv(args.output_dir / "signal_frame_tick3600ms.csv", index=False)
+    write_csv(args.output_dir / "execution_summary.csv", summary_rows)
+    (args.output_dir / "execution_summary.json").write_text(
         json.dumps(summary_json, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )

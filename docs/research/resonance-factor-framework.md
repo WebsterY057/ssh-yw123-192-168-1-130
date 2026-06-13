@@ -82,7 +82,7 @@ crypto-alpha/raw/exchange=binance/symbol={alpha_symbol}/data_type=onchain_pair_s
 
 ### 1.4 Token名称映射（alpha_symbol_map.json）
 
-文件：`/Users/yy/.hermes/workspace/共振信号交易策略/alpha_symbol_map.json`
+文件：`config/alpha_symbol_map.json`
 
 ```json
 {
@@ -393,7 +393,7 @@ dex_swap = conn.execute("""
 ```python
 import json
 
-with open('/Users/yy/.hermes/workspace/共振信号交易策略/alpha_symbol_map.json', 'r') as f:
+with open('config/alpha_symbol_map.json', 'r') as f:
     symbol_map = json.load(f)
 
 # 构建 alpha_symbol → display_name 映射
